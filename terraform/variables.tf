@@ -1,4 +1,8 @@
-# Terraform Variables
+#Terraform Variables
+variable "enable_non_compliant" {
+  type    = bool
+  default = true
+}
 
 variable "aws_region" {
   description = "AWS region để deploy resources"

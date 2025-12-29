@@ -41,6 +41,7 @@ resource "aws_security_group" "compliant" {
 
 # ===== NON-COMPLIANT SECURITY GROUP: Test Purpose =====
 resource "aws_security_group" "non_compliant" {
+  count = var.enable_non_compliant ? 1 : 0
   name        = "${local.name_prefix}-non-compliant-sg"
   description = "NON-COMPLIANT security group for testing - DO NOT USE IN PRODUCTION"
   vpc_id      = aws_vpc.main.id
@@ -51,7 +52,7 @@ resource "aws_security_group" "non_compliant" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["10.0.0.0/16"] # ❌ Vi phạm!
+    cidr_blocks = ["0.0.0.0/16"] # ❌ Vi phạm!
   }
 
   # ❌ VIOLATION CIS-AWS-8: RDP from internet
