@@ -13,7 +13,7 @@ resource "aws_security_group" "compliant" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["10.0.0.0/16"] # 10.0.0.0/8
+    cidr_blocks = var.allowed_ssh_cidr # 10.0.0.0/8
   }
 
   # ✅ COMPLIANT: HTTPS từ internal
@@ -51,7 +51,7 @@ resource "aws_security_group" "non_compliant" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"] # ❌ Vi phạm!
+    cidr_blocks = ["10.0.0.0/16"] # ❌ Vi phạm!
   }
 
   # ❌ VIOLATION CIS-AWS-8: RDP from internet
