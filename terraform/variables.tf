@@ -1,7 +1,7 @@
 #Terraform Variables
 variable "enable_non_compliant" {
   type    = bool
-  default = true
+  default = false
 }
 
 variable "aws_region" {
