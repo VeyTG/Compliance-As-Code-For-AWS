@@ -1,18 +1,18 @@
-name: AWS Compliance as Code
+# GitHub Actions: Compliance Check on PR
+# Chạy Terraform plan, Checkov, và OPA policy checks
+
+name: Compliance Check
 
 on:
-  push:
-    branches: [ main, master ]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master, develop]
+  push:
+    branches: [main, master, develop]
 
 env:
   TERRAFORM_VERSION: 1.6.0
 
 jobs:
-# =========================================================
-# 1. Terraform Validate
-# =========================================================
   terraform-validate:
     name: Terraform Validate
     runs-on: ubuntu-latest
@@ -29,46 +29,33 @@ jobs:
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
       - name: Terraform Init
         run: terraform init -backend=false
 
       - name: Terraform Validate
         run: terraform validate
 
-# =========================================================
-# 2. Checkov Scan
-# =========================================================
   checkov-scan:
     name: Checkov Security Scan
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run Checkov
+      - name: Run Checkov (Terraform)
         uses: bridgecrewio/checkov-action@master
         with:
           directory: terraform
           framework: terraform
-          output_format: cli,sarif
-          output_file_path: console,checkov.sarif
           soft_fail: false
 
-      - name: Upload Checkov SARIF
-        uses: github/codeql-action/upload-sarif@v2
-        if: always()
-        with:
-          sarif_file: checkov.sarif
-
-# =========================================================
-# 3. OPA Policy Check
-# =========================================================
   opa-policy-check:
-    name: OPA CIS Policy Check
+    name: OPA Policy Check
     runs-on: ubuntu-latest
 
     steps:
@@ -79,8 +66,7 @@ jobs:
         run: |
           curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
           chmod +x opa
-          sudo mv opa /usr/local/bin/opa
-          opa version
+          sudo mv opa /usr/local/bin/
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -88,41 +74,60 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
       - name: Terraform Init
-        run: terraform -chdir=terraform init -backend=false
+        run: terraform init -backend=false
+        working-directory: terraform
 
       - name: Terraform Plan
         run: |
-          terraform -chdir=terraform plan -out=tfplan
-          terraform -chdir=terraform show -json tfplan > terraform/tfplan.json
+          terraform plan -out=tfplan
+          terraform show -json tfplan > tfplan.json
+        working-directory: terraform
 
-      - name: OPA Test Policies
+      - name: Test OPA Policies
         run: opa test policies/rego/ -v
 
-      - name: OPA Evaluate Terraform Plan
+      - name: Run OPA Policy Check
         run: |
           opa eval \
             --data policies/rego/security.rego \
             --input terraform/tfplan.json \
-            --format pretty \
             "data.aws.compliance.deny" | tee opa-results.txt
 
-          if grep -q '"severity": "CRITICAL"\|"severity": "HIGH"' opa-results.txt; then
-            echo "❌ CIS violations detected"
+          if grep -q "CRITICAL\|HIGH" opa-results.txt; then
+            echo "❌ OPA policy violations found"
             exit 1
           else
-            echo "✅ No critical CIS violations"
+            echo "✅ No critical OPA violations"
           fi
 
       - name: Upload OPA Results
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: opa-results
           path: opa-results.txt
 
-# =========================================================
-# 4. Summary
-# =========================================================
+  conftest-check:
+    name: Conftest Policy Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Conftest
+        run: |
+          wget https://github.com/open-policy-agent/conftest/releases/download/v0.46.0/conftest_0.46.0_Linux_x86_64.tar.gz
+          tar xzf conftest_0.46.0_Linux_x86_64.tar.gz
+          sudo mv conftest /usr/local/bin/
+
+      - name: Run Conftest
+        run: |
+          conftest test terraform/*.tf \
+            --policy policies/rego/ \
+            --all-namespaces \
+            --no-fail
+
   summary:
     name: Compliance Summary
     runs-on: ubuntu-latest
@@ -130,11 +135,20 @@ jobs:
     if: always()
 
     steps:
-      - name: Generate Summary
+      - name: Write Summary
         run: |
-          echo "## 🛡️ AWS Compliance Check Summary" >> $GITHUB_STEP_SUMMARY
-          echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "## 🛡️ Compliance Check Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Terraform Validate | ${{ needs.terraform-validate.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Checkov Scan | ${{ needs.checkov-scan.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| OPA CIS Policy | ${{ needs.opa-policy-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| OPA Policy Check | ${{ needs.opa-policy-check.result }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if any check failed
+        if: |
+          needs.terraform-validate.result == 'failure' ||
+          needs.checkov-scan.result == 'failure' ||
+          needs.opa-policy-check.result == 'failure'
+        run: exit 1
+
