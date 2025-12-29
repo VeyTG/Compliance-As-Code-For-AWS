@@ -1,38 +1,33 @@
-# GitHub Actions: Compliance Check on PR
-# Chạy Terraform plan, Checkov, và OPA policy checks
-
-name: Compliance Check
+name: Compliance Check (Terraform + Checkov + OPA)
 
 on:
-  pull_request:
-    branches: [main, master, develop]
   push:
+    branches: [main, master, develop]
+  pull_request:
     branches: [main, master, develop]
 
 env:
-  AWS_REGION: us-east-1
-  TERRAFORM_VERSION: 1.6.0
+  TERRAFORM_VERSION: 1.5.5
 
 jobs:
+# =========================================================
+# 1. Terraform Validate
+# =========================================================
   terraform-validate:
     name: Terraform Validate
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./compliance-aws/terraform
+        working-directory: terraform
 
     steps:
-      - name: Checkout code
+      - name: Checkout source
         uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
-
-      - name: Terraform Format Check
-        run: terraform fmt -check -recursive
-        continue-on-error: true
 
       - name: Terraform Init
         run: terraform init -backend=false
@@ -40,49 +35,41 @@ jobs:
       - name: Terraform Validate
         run: terraform validate
 
+# =========================================================
+# 2. Checkov Scan
+# =========================================================
   checkov-scan:
     name: Checkov Security Scan
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      security-events: write
 
     steps:
-      - name: Checkout code
+      - name: Checkout source
         uses: actions/checkout@v4
 
       - name: Run Checkov
         uses: bridgecrewio/checkov-action@master
         with:
-          directory: compliance-aws/terraform
+          directory: terraform
           framework: terraform
-          output_format: cli,sarif
-          output_file_path: console,checkov-results.sarif
-          soft_fail: false
-          download_external_modules: false
+          soft_fail: true   # ❗ để demo FAIL mà pipeline vẫn chạy tiếp
 
-      - name: Upload Checkov results
-        uses: github/codeql-action/upload-sarif@v2
-        if: always()
-        with:
-          sarif_file: checkov-results.sarif
-
+# =========================================================
+# 3. OPA / Rego Policy Check (CORE ĐỒ ÁN)
+# =========================================================
   opa-policy-check:
-    name: OPA Policy Check
+    name: OPA CIS Policy Check
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./compliance-aws
 
     steps:
-      - name: Checkout code
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Setup OPA
+      - name: Install OPA
         run: |
           curl -L -o opa https://openpolicyagent.org/downloads/latest/opa_linux_amd64
           chmod +x opa
-          sudo mv opa /usr/local/bin/
+          sudo mv opa /usr/local/bin/opa
+          opa version
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -90,72 +77,48 @@ jobs:
           terraform_version: ${{ env.TERRAFORM_VERSION }}
 
       - name: Terraform Init
-        run: |
-          cd terraform
-          terraform init -backend=false
+        working-directory: terraform
+        run: terraform init -backend=false
 
-      - name: Generate Terraform Plan
+      - name: Terraform Plan to JSON
+        working-directory: terraform
         run: |
-          cd terraform
           terraform plan -out=tfplan
           terraform show -json tfplan > tfplan.json
 
-      - name: Test OPA Policies
-        run: |
-          opa test policies/rego/ -v
+      - name: Test Rego policies
+        run: opa test policies/rego -v
 
-      - name: Run OPA Policy Check
-        id: opa_check
+      - name: Run OPA CIS Evaluation
+        id: opa
         run: |
-          cd terraform
           opa eval \
-            --data ../policies/rego/security.rego \
-            --input tfplan.json \
+            --input terraform/tfplan.json \
+            --data policies/rego/security.rego \
             --format pretty \
-            'data.aws.compliance.deny' > opa-results.txt
+            "data.aws.compliance.deny" | tee opa-results.txt
 
+          echo ""
+          echo "🔎 CIS Violations:"
           cat opa-results.txt
 
-          # Check if có violations
-          if grep -q "CRITICAL\|HIGH" opa-results.txt; then
-            echo "❌ OPA policy violations found!"
-            cat opa-results.txt
+          if grep -q "CIS-AWS" opa-results.txt; then
+            echo "❌ CIS violations detected"
             exit 1
           else
-            echo "✅ No critical OPA policy violations"
+            echo "✅ No CIS violations"
           fi
 
-      - name: Upload OPA Results
+      - name: Upload OPA result
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: opa-results
-          path: compliance-aws/terraform/opa-results.txt
+          path: opa-results.txt
 
-  conftest-check:
-    name: Conftest Policy Check
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./compliance-aws
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Conftest
-        run: |
-          wget https://github.com/open-policy-agent/conftest/releases/download/v0.46.0/conftest_0.46.0_Linux_x86_64.tar.gz
-          tar xzf conftest_0.46.0_Linux_x86_64.tar.gz
-          sudo mv conftest /usr/local/bin/
-
-      - name: Run Conftest
-        run: |
-          conftest test terraform/*.tf \
-            --policy policies/rego/ \
-            --all-namespaces \
-            --no-fail
-
+# =========================================================
+# 4. Summary
+# =========================================================
   summary:
     name: Compliance Summary
     runs-on: ubuntu-latest
@@ -163,21 +126,12 @@ jobs:
     if: always()
 
     steps:
-      - name: Check Results
+      - name: Summary
         run: |
-          echo "## 🛡️ Compliance Check Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🛡️ Compliance Pipeline Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Terraform Validate | ${{ needs.terraform-validate.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Checkov Scan | ${{ needs.checkov-scan.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| OPA Policy Check | ${{ needs.opa-policy-check.result }} |" >> $GITHUB_STEP_SUMMARY
-
-      - name: Fail if any check failed
-        if: |
-          needs.terraform-validate.result == 'failure' ||
-          needs.checkov-scan.result == 'failure' ||
-          needs.opa-policy-check.result == 'failure'
-        run: |
-          echo "❌ Compliance checks failed!"
-          exit 1
+          echo "| OPA CIS Policy | ${{ needs.opa-policy-check.result }} |" >> $GITHUB_STEP_SUMMARY
