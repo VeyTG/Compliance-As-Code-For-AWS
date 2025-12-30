@@ -1,5 +1,3 @@
-# Terraform Outputs
-
 output "evidence_bucket_name" {
   description = "Tên S3 bucket chứa compliance evidence"
   value       = aws_s3_bucket.evidence.id
@@ -30,9 +28,10 @@ output "compliant_sg_id" {
   value       = aws_security_group.compliant.id
 }
 
-output "non_compliant_sg_id" {
-  description = "Security Group ID (non-compliant - for testing)"
-  value       = aws_security_group.non_compliant.id
+# Sửa để fix Terraform validate khi SG có count
+output "non_compliant_sg_ids" {
+  description = "Security Group IDs (non-compliant - for testing)"
+  value       = [for sg in aws_security_group.non_compliant : sg.id]
 }
 
 output "sns_topic_arn" {
@@ -44,3 +43,4 @@ output "eventbridge_rule_name" {
   description = "EventBridge rule name"
   value       = aws_cloudwatch_event_rule.compliance_scan.name
 }
+
