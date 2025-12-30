@@ -115,7 +115,6 @@ resource "aws_s3_bucket_policy" "cloudtrail" {
 }
 
 # ===== NON-COMPLIANT BUCKET: Test Purpose =====
-# Bucket này để demo violations và auto-remediation
 resource "aws_s3_bucket" "test_non_compliant" {
   bucket = "test-non-compliant-${random_id.suffix.hex}"
 
@@ -126,15 +125,15 @@ resource "aws_s3_bucket" "test_non_compliant" {
   })
 }
 
-# ❌ VIOLATION CIS-AWS-5: Public access allowed
+# ❌ Non-compliant public access
 resource "aws_s3_bucket_public_access_block" "test_non_compliant" {
   bucket = aws_s3_bucket.test_non_compliant.id
 
-  block_public_acls       = false # ❌ Vi phạm!
-  block_public_policy     = false # ❌ Vi phạm!
+  block_public_acls       = false
+  block_public_policy     = false
   ignore_public_acls      = false
   restrict_public_buckets = false
 }
 
-# ❌ VIOLATION CIS-AWS-6: No encryption
-# (Không tạo encryption config = không có encryption)
+# ❌ No encryption config = Violation CIS-AWS-6
+
