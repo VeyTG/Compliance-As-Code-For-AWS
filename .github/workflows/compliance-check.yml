@@ -36,7 +36,7 @@ jobs:
         run: terraform validate
 
 # =========================================================
-# 2. Checkov Scan
+# 2. Checkov Scan (Chỉ 4 CIS-AWS control)
 # =========================================================
   checkov-scan:
     name: Checkov Security Scan
@@ -46,15 +46,16 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Run Checkov
-        uses: bridgecrewio/checkov-action@master
+      - name: Run Checkov (CIS-AWS-3,4,5,6 only)
+        uses: bridgecrewio/checkov-action@v12
         with:
           directory: terraform
           framework: terraform
-          soft_fail: true   # ❗ để demo FAIL mà pipeline vẫn chạy tiếp
+          check: CKV_AWS_144,CKV_AWS_145,CKV_AWS_18,CKV_AWS_19
+          soft_fail: false  # ❌ Fail pipeline nếu 4 control này vi phạm
 
 # =========================================================
-# 3. OPA / Rego Policy Check (CORE ĐỒ ÁN)
+# 3. OPA Policy Check (Chỉ CloudTrail + S3, bỏ các resource khác)
 # =========================================================
   opa-policy-check:
     name: OPA CIS Policy Check
@@ -89,20 +90,19 @@ jobs:
       - name: Test Rego policies
         run: opa test policies/rego -v
 
-      - name: Run OPA CIS Evaluation
+      - name: Run OPA CIS Evaluation (CloudTrail + S3)
         id: opa
         run: |
           opa eval \
             --input terraform/tfplan.json \
             --data policies/rego/security.rego \
-            --format pretty \
-            "data.aws.compliance.deny" | tee opa-results.txt
+            'data.aws.compliance.deny' | tee opa-results.txt
 
           echo ""
-          echo "🔎 CIS Violations:"
+          echo "🔎 CIS Violations (CloudTrail + S3 only):"
           cat opa-results.txt
 
-          if grep -q "CIS-AWS" opa-results.txt; then
+          if [ -s opa-results.txt ]; then
             echo "❌ CIS violations detected"
             exit 1
           else
